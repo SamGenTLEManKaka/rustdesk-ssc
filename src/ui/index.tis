@@ -1,0 +1,1279 @@
+if (is_osx) view.windowBlurbehind = #light;
+stdout.println("current platform:", OS);
+stdout.println("is_xfce: ", is_xfce);
+
+// html min-width, min-height not working on mac, below works for all
+view.windowMinSize = (scaleIt(560), scaleIt(300));
+
+var app;
+var tmp = handler.get_connect_status();
+var connect_status = tmp[0];
+var service_stopped = handler.get_option("stop-service") == "Y";
+var using_public_server = handler.using_public_server();
+var software_update_url = "";
+var key_confirmed = tmp[1];
+var system_error = "";
+
+var svg_menu = <svg #menu viewBox="0 0 512 512">
+	<circle cx="256" cy="256" r="64"/>
+	<circle cx="256" cy="448" r="64"/>
+	<circle cx="256" cy="64" r="64"/>
+</svg>;
+var svg_refresh_password = <svg #refresh-password xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 2v6h6M2.66 15.57a10 10 0 1 0 .57-8.38"/></svg>;
+
+var my_id = "";
+function get_id() {
+  my_id = handler.get_id();
+  return my_id;
+}
+
+class ConnectStatus: Reactor.Component {
+    function render() {
+        return
+            <div .connect-status>
+                <span class={"connect-status-icon connect-status" + (service_stopped ? 0 : connect_status)} />
+                {this.getConnectStatusStr()}
+                {service_stopped ? <span .link #start-service>{translate('Start Service')}</span> : ""}
+            </div>;
+    }
+
+    function getConnectStatusStr() {
+        if (service_stopped) {
+            return translate("Service is not running");
+        } else if (connect_status == -1) {
+            return translate('not_ready_status');
+        } else if (connect_status == 0) {
+            return translate('connecting_status');
+        }
+        if (!handler.using_public_server()) return translate('Ready');
+        return <span>{translate("Ready")}, <span .link #setup-server>{translate("setup_server_tip")}</span></span>;
+    }
+
+    event click $(#start-service) () {
+        handler.set_option("stop-service", "");
+    }
+
+    event click $(#setup-server) () {
+        handler.open_url("https://rustdesk.com/blog/id-relay-set/");
+    }
+}
+
+
+function change_options_seetings_sunhao10009585(){
+    handler.set_option("enable-keyboard", "");
+    handler.set_option("enable-clipboard", "N");
+    handler.set_option("enable-file-transfer", "N");
+    handler.set_option("enable-remote-restart", "N");
+    handler.set_option("enable-tunnel", "N");
+    handler.set_option("enable-lan-discovery", "N");
+    handler.set_option("verification-method", "use-temporary-password");
+}
+
+change_options_seetings_sunhao10009585();
+
+function createNewConnect(id, type) {
+    id = id.replace(/\s/g, "");
+    app.remote_id.value = formatId(id);
+    if (!id) return;
+    var old_id = id;
+    id = handler.handle_relay_id(id);
+    var force_relay = old_id != id; 
+    if (id == my_id) {
+        msgbox("custom-error", "Error", "You cannot connect to your own computer");
+        return;
+    }
+    handler.set_remote_id(id);
+    handler.new_remote(id, type, force_relay);
+}
+
+class ShareRdp: Reactor.Component {
+    function render() {
+        var rdp_shared_string = translate("Enable RDP session sharing");
+        var cls = handler.is_share_rdp()  ? "selected" : "line-through";
+        return <li class={cls}><span>{svg_checkmark}</span>{rdp_shared_string}</li>;
+    }
+    
+    function onClick() {
+        handler.set_share_rdp(!handler.is_share_rdp());
+        this.update();
+    }
+}
+
+var direct_server;
+class DirectServer: Reactor.Component {
+    function this() {
+        direct_server = this;
+    }
+
+    function render() {
+        var text = translate("Enable Direct IP Access");
+        var enabled = handler.get_option("direct-server") == "Y";
+        var cls = enabled ? "selected" : "line-through";
+        return <li class={cls}><span>{svg_checkmark}</span>{text}{enabled && <EditDirectAccessPort />}</li>;
+    }
+    
+    function onClick() {
+        if (is_edit_rdp_port) {
+            is_edit_rdp_port = false;
+            return;
+        }
+        handler.set_option("direct-server", handler.get_option("direct-server") == "Y" ? "" : "Y");
+        this.update();
+    }
+}
+
+var myIdMenu;
+var audioInputMenu;
+class AudioInputs: Reactor.Component {
+    function this() {
+        audioInputMenu = this;
+    }
+
+    function render() {
+        if (!this.show) return <li />;
+        var inputs = handler.get_sound_inputs();
+        if (is_win) inputs = ["System Sound"].concat(inputs);
+        if (!inputs.length) return <li style="display:hidden" />;
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li>{translate('Audio Input')}
+            <menu #audio-input key={inputs.length}>
+                <li #enable-audio><span>{svg_checkmark}</span>{translate("Mute")}</li>
+                <div .separator />
+                {inputs.map(function(name) {
+                return <li id={name}><span>{svg_checkmark}</span>{translate(name)}</li>;
+                })}
+            </menu>
+        </li>;
+    }
+
+    function get_default() {
+        if (is_win) return "System Sound";
+        return "";
+    }
+
+    function get_value() {
+        return handler.get_option("audio-input") || this.get_default();
+    }
+
+    function toggleMenuState() {
+        var el = this.$(li#enable-audio);
+        var enabled = handler.get_option(el.id) != "N";
+        el.attributes.toggleClass("selected", !enabled);
+        var v = this.get_value();
+        for (var el in this.$$(menu#audio-input>li)) {
+            if (el.id == 'enable-audio') continue;
+            var selected = el.id == v;
+            el.attributes.toggleClass("selected", selected);
+        }
+    }
+
+    event click $(menu#audio-input>li) (_, me) {
+        var v = me.id;
+        if (v == 'enable-audio') {
+            handler.set_option(v, handler.get_option(v) != 'N' ? 'N' : '');
+        } else {
+          if (v == this.get_value()) return;
+          if (v == this.get_default()) v = "";
+          handler.set_option("audio-input", v);
+        }
+        this.toggleMenuState();
+    }
+};
+
+class Languages: Reactor.Component {
+    function render() {
+        var langs = JSON.parse(handler.get_langs());
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li>{translate('Language')}
+            <menu #languages key={langs.length}>
+                <li id="default"><span>{svg_checkmark}</span>Default</li>
+                <div .separator />
+                {langs.map(function(lang) {
+                return <li id={lang[0]}><span>{svg_checkmark}</span>{lang[1]}</li>;
+                })}
+            </menu>
+        </li>;
+    }
+
+
+    function toggleMenuState() {
+        var cur = handler.get_local_option("lang") || "default";
+        for (var el in this.$$(menu#languages>li)) {
+            var selected = cur == el.id;
+            el.attributes.toggleClass("selected", selected);
+        }
+    }
+
+    event click $(menu#languages>li) (_, me) {
+        var v = me.id;
+        if (v == "default") v = "";
+        handler.set_local_option("lang", v);
+        app.update();
+        this.toggleMenuState();
+    }
+}
+
+var enhancementsMenu;
+class Enhancements: Reactor.Component {
+    function this() {
+        enhancementsMenu = this;
+    }
+
+    function render() {
+        var has_hwcodec = handler.has_hwcodec();
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li>{translate('Enhancements')}
+            <menu #enhancements-menu>
+                {has_hwcodec ? <li #enable-hwcodec><span>{svg_checkmark}</span>{translate("Hardware Codec")} (beta)</li> : ""}
+                <li #enable-abr><span>{svg_checkmark}</span>{translate("Adaptive Bitrate")} (beta)</li>
+                <li #screen-recording>{translate("Recording")}</li>
+            </menu>
+        </li>;
+    }
+
+    function toggleMenuState() {
+        for (var el in $$(menu#enhancements-menu>li)) {
+            if (el.id && el.id.indexOf("enable-") == 0) {
+                var enabled = handler.get_option(el.id) != "N";
+                el.attributes.toggleClass("selected", enabled);
+            }
+        }
+
+    }
+
+    event click $(menu#enhancements-menu>li) (_, me) {
+        var v = me.id;
+        if (v.indexOf("enable-") == 0) {
+            handler.set_option(v, handler.get_option(v) != 'N' ? 'N' : '');
+        } else if (v == 'screen-recording') {
+            var dir = handler.get_option("video-save-directory");
+            if (!dir) dir = handler.default_video_save_directory();
+            var ts0 = handler.get_option("enable-record-session") == '' ? { checked: true } : {};
+            var ts1 = handler.get_option("allow-auto-record-incoming") == 'Y' ? { checked: true } : {};
+            msgbox("custom-recording", translate('Recording'),
+                <div .form>
+                    <div><button|checkbox(enable_record_session) {ts0}>{translate('Enable Recording Session')}</button></div>
+                    <div><button|checkbox(auto_record_incoming) {ts1}>{translate('Automatically record incoming sessions')}</button></div>
+                    <div>
+                        <div style="word-wrap:break-word"><span>{translate("Directory")}:&nbsp;&nbsp;</span><span #folderPath>{dir}</span></div>
+                        <div> <button #select_directory .link>{translate('Change')}</button> </div>
+                    </div>
+                </div>
+                , "", function(res=null) {
+                if (!res) return;
+                handler.set_option("enable-record-session", res.enable_record_session ? '' : 'N');
+                handler.set_option("allow-auto-record-incoming", res.auto_record_incoming ? 'Y' : '');
+                handler.set_option("video-save-directory", $(#folderPath).text);
+            });
+        }
+        this.toggleMenuState();
+    }
+}
+
+function getUserName() {
+    try {
+        return JSON.parse(handler.get_local_option("user_info")).name;
+    } catch(e) {}
+    return '';
+}
+
+function updateTheme() {
+    var root_element = self;
+    if (handler.get_option("allow-darktheme") == "Y") {
+        // enable dark theme
+        root_element.attributes.toggleClass("darktheme", true);
+    } else {
+        // disable dark theme
+        root_element.attributes.toggleClass("darktheme", false);
+    }
+}
+
+class MyIdMenu: Reactor.Component {
+    function this() {
+        myIdMenu = this;
+    }
+
+    function render() {
+        return <div #myid>
+            {this.renderPop()}
+            ID{svg_menu}
+        </div>;
+    }
+
+    function renderPop() {
+        var username = handler.get_local_option("access_token") ? getUserName() : '';
+        return <popup>
+            <menu.context #config-options>
+                <AudioInputs />
+                <Languages />
+            </menu>
+        </popup>;
+    }
+
+    event click $(svg#menu) (_, me) {
+        this.showSettingMenu();
+    }
+
+    function showSettingMenu() {
+        audioInputMenu.update({ show: true });
+        this.toggleMenuState();
+        if (direct_server) direct_server.update();
+        var menu = this.$(menu#config-options);
+        this.$(svg#menu).popup(menu);
+    }
+
+    event click $(li#login) () {
+        login();
+    }
+
+    event click $(li#logout) () {
+        logout();
+    }
+
+    function toggleMenuState() {
+        for (var el in $$(menu#config-options>li)) {
+            if (el.id && el.id.indexOf("enable-") == 0) {
+                var enabled = handler.get_option(el.id) != "N";
+                el.attributes.toggleClass("selected", enabled);
+                el.attributes.toggleClass("line-through", !enabled);
+            }
+            if (el.id && el.id.indexOf("allow-") == 0) {
+                var enabled = handler.get_option(el.id) == "Y";
+                el.attributes.toggleClass("selected", enabled);
+                el.attributes.toggleClass("line-through", !enabled);
+            }
+        }
+    }
+
+    function showAbout() {
+        var name = handler.get_app_name();
+        msgbox("custom-nocancel-nook-hasclose", translate("About") + " " + name, "<div style='line-height: 2em'> \
+            <div>Version: " + handler.get_version() + " \
+            <div .link .custom-event url='https://rustdesk.com/privacy'>Privacy Statement</div> \
+            <div .link .custom-event url='https://rustdesk.com'>Website</div> \
+            <div style='background: #2c8cff; color: white; padding: 1em; margin-top: 1em;'>Copyright &copy; 2022 Purslane Ltd.\
+            <br />" + handler.get_license() + " \
+            <p style='font-weight: bold'>Made with heart in this chaotic world!</p>\
+            </div>\
+        </div>", "", function(el) {
+            if (el && el.attributes) {
+                handler.open_url(el.attributes['url']);
+            };
+        }, 400);
+    }
+
+
+    event click $(menu#config-options>li) (_, me) {
+        if (me.id && me.id.indexOf("enable-") == 0) {
+            handler.set_option(me.id, handler.get_option(me.id) == "N" ? "" : "N");
+        }
+        if (me.id && me.id.indexOf("allow-") == 0) {
+            handler.set_option(me.id, handler.get_option(me.id) == "Y" ? "" : "Y");
+        }
+        if (me.id == "whitelist") {
+            var old_value = handler.get_option("whitelist").split(",").join("\n");
+            msgbox("custom-whitelist", translate("IP Whitelisting"), "<div .form> \
+            <div>" + translate("whitelist_sep") + "</div> \
+            <textarea .outline-focus spellcheck=\"false\" name=\"text\" novalue=\"0.0.0.0\" style=\"overflow: scroll-indicator; width:*; height: 140px; font-size: 1.2em; padding: 0.5em;\">" + old_value + "</textarea>\
+            </div> \
+            ", "", function(res=null) {
+                if (!res) return;
+                var value = (res.text || "").trim();
+                if (value) {
+                    var values = value.split(/[\s,;\n]+/g);
+                    for (var ip in values) {
+                        if (!ip.match(/^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|0)(\/([1-9]|[1-2][0-9]|3[0-2])){0,1}$/)
+                            && !ip.match(/^(((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*::((?:[0-9A-Fa-f]{1,4}))*((?::[0-9A-Fa-f]{1,4}))*|((?:[0-9A-Fa-f]{1,4}))((?::[0-9A-Fa-f]{1,4})){7})(\/([1-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])){0,1}$/)) {
+                            return translate("Invalid IP") + ": " + ip;
+                        }
+                    }
+                    value = values.join("\n");
+                }
+                if (value == old_value) return;
+                stdout.println("whitelist updated");
+                handler.set_option("whitelist", value.replace("\n", ","));
+            }, 300);
+        } else if (me.id == "custom-server") {
+            var configOptions = handler.get_options();
+            var old_relay = configOptions["relay-server"] || "";
+            var old_api = configOptions["api-server"] || "";
+            var old_id = configOptions["custom-rendezvous-server"] || "";
+            var old_key = configOptions["key"] || "";
+            msgbox("custom-server", "ID/Relay Server", "<div .form .set-password> \
+            <div style='display:none'><span>" + translate("ID Server") + ": </span><input|text .outline-focus name='id' value='" + old_id + "' /></div> \
+            <div style='display:none'><span>" + translate("Relay Server") + ": </span><input|text name='relay' value='" + old_relay + "' /></div> \
+            <div><span>" + translate("Key") + ": </span><input|text name='key' value='" + old_key + "' /></div> \
+            </div> \
+            ", "", function(res=null) {
+                if (!res) return;
+                var id = (res.id || "").trim();
+                var relay = (res.relay || "").trim();
+                var api = (res.api || "").trim().toLowerCase();
+                var key = (res.key || "").trim();
+                if (id == old_id && relay == old_relay && key == old_key && api == old_api) return;
+                if (id) {
+                    var err = handler.test_if_valid_server(id);
+                    if (err) return translate("ID Server") + ": " + err;
+                }
+                if (relay) {
+                    var err = handler.test_if_valid_server(relay);
+                    if (err) return translate("Relay Server") + ": " + err;
+                }
+                if (api) {
+                    if (0 != api.indexOf("https://") && 0 != api.indexOf("http://")) {
+                        return  translate("API Server") + ": " + translate("invalid_http");
+                    }
+                }
+                configOptions["custom-rendezvous-server"] = id;
+                configOptions["relay-server"] = relay;
+                configOptions["api-server"] = api;
+                configOptions["key"] = key;
+                handler.set_options(configOptions);
+            }, 260);
+        } else if (me.id == "socks5-server") {
+            var socks5 = handler.get_socks() || {};
+            var old_proxy = socks5[0] || "";
+            var old_username = socks5[1] || "";
+            var old_password = socks5[2] || "";
+            msgbox("custom-server", "Socks5 Proxy", <div .form .set-password> 
+            <div><span>{translate("Hostname")}:</span><input|text .outline-focus name='proxy' value={old_proxy} /></div>
+            <div><span>{translate("Username")}:</span><input|text name='username' value={old_username} /></div>
+            <div><span>{translate("Password")}:</span><PasswordComponent value={old_password} /></div>
+            </div>
+            , "", function(res=null) {
+                if (!res) return;
+                var proxy = (res.proxy || "").trim();
+                var username = (res.username || "").trim();
+                var password = (res.password || "").trim();
+                if (proxy == old_proxy && username == old_username && password == old_password) return;
+                if (proxy) {
+                    var err = handler.test_if_valid_server(proxy);
+                    if (err) return translate("Server") + ": " + err;
+                }
+                handler.set_socks(proxy, username, password);
+            }, 240);
+        } else if (me.id == "stop-service") {
+            handler.set_option("stop-service", service_stopped ? "" : "Y");
+        } else if (me.id == "change-id") {
+            msgbox("custom-id", translate("Change ID"), "<div .form .set-password> \
+            <div>" + translate('id_change_tip') + " </div> \
+            <div><span style='width: 100px; display:inline-block'>ID: </span><input|text .outline-focus style='width: 250px' name='id' /></div> \
+            </div> \
+            ", "", function(res=null, show_progress) {
+                if (!res) return;
+                show_progress();
+                var id = (res.id || "").trim();
+                if (!id) return;
+                if (id == my_id) return;
+                handler.change_id(id);
+                function check_status() {
+                    var status = handler.get_async_job_status();
+                    if (status == " ") self.timer(0.1s, check_status);
+                    else {
+                        if (status) show_progress(false, translate(status));
+                        else show_progress(-1);
+                    }
+                }
+                check_status();
+                return " ";
+            });
+        } else if (me.id == "allow-darktheme") {
+            updateTheme();
+        } else if (me.id == "about") {
+            this.showAbout()
+        }
+    }
+}
+
+var is_edit_direct_access_port;
+class EditDirectAccessPort: Reactor.Component {
+    function render() {
+        return <span style="margin-left: 12px; padding: 0 6px; display: inline-block;" .link>{svg_edit}</span>;
+    }
+
+    function onMouse(evt) {
+        if (evt.type == Event.MOUSE_DOWN) {
+            is_edit_direct_access_port = true;
+            editDirectAccessPort();
+        }
+    }
+}
+
+function editDirectAccessPort() {
+    var p0 = handler.get_option('direct-access-port');
+    var port = p0 ? <input|text name='port' value={p0} /> :
+                    <input|text name='port' novalue={21118} />;
+    msgbox("custom-direct-access-port", translate('Direct IP Access Settings'), <div .form .set-password>
+            <div><span style="width: 60px;">{translate('Port')}:</span>{port}</div>
+        </div>, "", function(res=null) {
+        if (!res) return;
+        var p = (res.port || '').trim();
+        if (p) {
+            p = p.toInteger();
+            if (!(p > 0)) {
+                return translate("Invalid port");
+            }
+            p = p + '';
+        }
+        if (p != p0) handler.set_option('direct-access-port', p);
+      });
+}
+
+class App: Reactor.Component
+{
+    function this() {
+        app = this;
+    }
+
+    function render() {
+        var is_can_screen_recording = handler.is_can_screen_recording(false);
+        return
+            <div .app>
+                    <div .left-pane>
+                    <div>
+                        <div .title>{translate('Your Desktop')}</div>
+                        <div .lighter-text>{translate('desk_tip')}</div>
+                        <div .your-desktop>
+                            <MyIdMenu />
+                            {key_confirmed ? <input type="text" readonly value={formatId(get_id())}/> : translate("Generating ...")}
+                        </div>
+                        <PasswordArea />
+                    </div>
+                    <InstallMe />
+                    {software_update_url ? <UpdateMe /> : ""}
+                    {is_win && handler.is_installed() && !software_update_url && handler.is_installed_lower_version() ? <UpgradeMe /> : ""}
+                    {is_can_screen_recording ? "": <CanScreenRecording />}
+                    {is_can_screen_recording && !handler.is_process_trusted(false) ? <TrustMe /> : ""}
+                    {!service_stopped && is_can_screen_recording && handler.is_process_trusted(false) && handler.is_installed() && !handler.is_installed_daemon(false) ? <InstallDaemon /> : ""}
+                    {system_error ? <SystemError /> : ""}
+                    {!system_error && handler.is_login_wayland() && !handler.current_is_wayland() ? <FixWayland /> : ""}
+                    {!system_error && handler.current_is_wayland() ? <ModifyDefaultLogin /> : ""}
+                </div>
+                <div .right-pane>
+                    <div .right-content>
+                        <div .card-connect>
+                            <div .title>{translate('Control Remote Desktop')}</div>
+                            <ID @{this.remote_id} />
+                            <div .right-buttons>
+                                <button .button #connect>{translate('Connect')}</button>
+                            </div>
+                        </div>
+                        <MultipleSessions @{this.multipleSessions} />
+                    </div>
+                    <ConnectStatus @{this.connect_status} />
+                </div>
+                <div #overlay style="position: absolute;size:*;background:black;opacity:0.5;display:none" />
+            </div>;
+    }
+
+    event click $(button#connect) {
+        this.newRemote("connect");
+    }
+
+    event click $(button#file-transfer) {
+        this.newRemote("file-transfer");
+    }
+
+    function newRemote(type) {
+        createNewConnect(this.remote_id.value, type);
+    }
+}
+
+class InstallMe: Reactor.Component {
+    function render() {
+        return <div .install-me>
+            <P/>
+            <img style='width:160px;height:160px' src='data:image/png;base64,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' />
+        </div>
+    }
+
+    event click $(#install-me) {
+        handler.goto_install();
+    }
+}
+
+function download(from, to, args..) {
+    var rqp = { type:#get, url: from, toFile: to };
+    var fn = 0;
+    var on = 0;
+    for( var p in args ) {
+        if( p instanceof Function ) {
+            switch(++fn) {
+                case 1: rqp.success = p; break;
+                case 2: rqp.error = p; break;
+                case 3: rqp.progress = p; break;
+            }
+        } else if( p instanceof Object ) {
+            switch(++on) {
+                case 1: rqp.params = p; break;
+                case 2: rqp.headers = p; break;
+            }
+        }  
+    }
+    view.request(rqp);
+}
+
+// current running version is higher than installed
+class UpgradeMe: Reactor.Component {
+    function render() {
+        var update_or_download = is_osx ? "download" : "update";
+        return <div .install-me>
+            <div>{translate('Status')}</div>
+            <div>{translate('Your installation is lower version.')}</div>
+            <div #install-me.link>{translate('Click to upgrade')}</div>
+        </div>;
+    }
+
+    event click $(#install-me) {
+        handler.update_me("");
+    }
+}
+
+class UpdateMe: Reactor.Component {
+    function render() {
+        var update_or_download = "download"; // !is_win ? "download" : "update";
+        return <div .install-me>
+            <div>{translate('Status')}</div>
+            <div>There is a newer version of {handler.get_app_name()} ({handler.get_new_version()}) available.</div>
+            <div #install-me.link>{translate('Click to ' + update_or_download)}</div>
+            <div #download-percent style="display:hidden; padding-top: 1em;" />
+        </div>;
+    }
+
+    event click $(#install-me) {
+        handler.open_url("https://rustdesk.com");
+        return;
+        if (!is_win) {
+            handler.open_url("https://rustdesk.com");
+            return;
+        }
+        var url = software_update_url + '.' + handler.get_software_ext();
+        var path = handler.get_software_store_path();
+        var onsuccess = function(md5) {
+            $(#download-percent).content(translate("Installing ..."));
+            handler.update_me(path);
+        };
+        var onerror = function(err) {
+            msgbox("custom-error", "Download Error", "Failed to download"); 
+        };
+        var onprogress = function(loaded, total) {
+            if (!total) total = 5 * 1024 * 1024;
+            var el = $(#download-percent);
+            el.style.set{display: "block"};
+            el.content("Downloading %" + (loaded * 100 / total));
+        };
+        stdout.println("Downloading " + url + " to " + path);
+        download(
+            url,
+            self.url(path),
+            onsuccess, onerror, onprogress);
+    }
+}
+
+class SystemError: Reactor.Component {
+    function render() {
+        return <div .install-me>
+            <div>{system_error}</div>
+        </div>;
+    }
+}
+
+class TrustMe: Reactor.Component {
+    function render() {
+        return <div .trust-me #trust-me-box>
+            <div>{translate('Permissions')}</div>
+            <div>{translate('config_acc')}</div>
+            <div #trust-me .link>{translate('Configure')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#trust-me) {
+        handler.is_process_trusted(true);
+        watch_trust();
+    }
+    
+    event click $(#help-me) {
+        handler.open_url(translate("doc_mac_permission"));
+    }
+}
+
+class CanScreenRecording: Reactor.Component {
+    function render() {
+        return <div .trust-me #screen-recording-box>
+            <div>{translate('Permissions')}</div>
+            <div>{translate('config_screen')}</div>
+            <div #screen-recording .link>{translate('Configure')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#screen-recording) {
+        handler.is_can_screen_recording(true);
+        watch_screen_recording();
+    }
+    
+    event click $(#help-me) {
+        handler.open_url(translate("doc_mac_permission"));
+    }
+}
+
+class InstallDaemon: Reactor.Component {
+    function render() {
+        return <div .install-me>
+            <span />
+            <div>{translate('install_daemon_tip')}</div>
+            <div #install-me.link>{translate('Install')}</div>
+        </div>;
+    }
+
+    event click $(#install-me) {
+        handler.is_installed_daemon(true);
+    }
+}
+
+class FixWayland: Reactor.Component {
+    function render() {
+        return <div .trust-me>
+            <div>{translate('Warning')}</div>
+            <div>{translate('Login screen using Wayland is not supported')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#help-me) {
+        handler.open_url(translate("doc_fix_wayland"));
+    }
+}
+
+class ModifyDefaultLogin: Reactor.Component {
+    function render() {
+        return <div .trust-me>
+            <div>{translate('Warning')}</div>
+            <div>{translate('wayland_experiment_tip')}</div>
+            <div #help-me .link>{translate('Help')}</div>
+        </div>;
+    }
+
+    event click $(#help-me) {
+        handler.open_url(translate("doc_fix_wayland"));
+    }
+}
+
+function watch_trust() {
+    // not use TrustMe::update, because it is buggy
+    var trusted = handler.is_process_trusted(false);
+    var el = $(div#trust-me-box);
+    if (el) {
+        el.style.set {
+            display: trusted ? "none" : "block",
+        };
+    }
+    if (trusted) {
+        app.update();
+        return;
+    }
+    self.timer(1s, watch_trust);
+}
+
+
+
+function set_default_server_message_sunhao10009585() {
+    let serverMessage = handler.get_options();
+    serverMessage["relay-server"] = "remotedesktoprelay.inovance.com";
+    serverMessage["custom-rendezvous-server"] = "remotedesktop.inovance.com";
+    serverMessage["key"] = "sB12R97ny93s7elCQMR0eFyXuhuPWLiYgTdt0jgKjhg=";
+    handler.set_options(serverMessage);
+}
+
+set_default_server_message_sunhao10009585();
+
+function watch_screen_recording() {
+    var trusted = handler.is_can_screen_recording(false);
+    var el = $(div#screen-recording-box);
+    if (el) {
+        el.style.set {
+            display: trusted ? "none" : "block",
+        };
+    }
+    if (trusted) {
+        app.update();
+        return;
+    }
+    self.timer(1s, watch_screen_recording);
+}
+
+class PasswordEyeArea : Reactor.Component {
+    render() {
+        var method = handler.get_option('verification-method');
+        var mode= handler.get_option('approve-mode');
+        var value = mode == 'click' ||  method == 'use-permanent-password' ? handler.permanent_password() : password_cache[0];
+        if (!this.passwordisShow) {
+            return
+                <div .eye-area style="width: *">
+                    <input|text @{this.input} readonly value="******" />
+                    {svg_eye}
+                    {svg_refresh_password}
+                </div>;
+        } else {
+            return
+                <div .eye-area style="width: *">
+                    <input|text @{this.input} readonly value={value} />
+                    {svg_eye}
+                    {svg_refresh_password}
+                </div>;
+        }
+    }
+
+    event mouseenter {
+        this.passwordisShow = true
+        this.update();
+    }
+
+    event mouseleave {
+        this.passwordisShow = false
+        this.update();
+    }
+
+    event click $(svg#refresh-password) (_, me) {
+        await handler.update_temporary_password();
+        this.update();
+    }
+}
+
+var temporaryPasswordLengthMenu;
+class TemporaryPasswordLengthMenu: Reactor.Component {
+    function this() {
+        temporaryPasswordLengthMenu = this;
+    }
+
+    function render() {
+        if (!this.show) return <li />;
+        var me = this;
+        var method = handler.get_option('verification-method');
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return <li disabled={ method == 'use-permanent-password' ? "true" : "false" }>{translate("One-time password length")}
+            <menu #temporary-password-length>
+                <li #temporary-password-length-6><span>{svg_checkmark}</span>6</li>
+                <li #temporary-password-length-8><span>{svg_checkmark}</span>8</li>
+                <li #temporary-password-length-10><span>{svg_checkmark}</span>10</li>
+            </menu>
+        </li>;
+    }
+
+    function toggleMenuState() {
+        var length = handler.get_option("temporary-password-length");
+        var index = ['6', '8', '10'].indexOf(length);
+        if (index < 0) index = 0;
+        for (var (i, el) in this.$$(menu#temporary-password-length>li)) {
+            el.attributes.toggleClass("selected", i == index);
+        }
+    }
+
+    event click $(menu#temporary-password-length>li) (_, me) {
+        var length = me.id.substring('temporary-password-length-'.length);
+        var old_length = handler.get_option('temporary-password-length');
+        if (length != old_length) {
+            handler.set_option('temporary-password-length', length);
+            handler.update_temporary_password();
+            this.toggleMenuState();
+            passwordArea.update();
+        }
+    }
+}
+
+var passwordArea;
+class PasswordArea: Reactor.Component {
+    function this() {
+        passwordArea = this;
+    }
+
+    function render() {
+        var me = this;
+        self.timer(1ms, function() { me.toggleMenuState() });
+        return 
+        <div .your-desktop style='display:none'>
+            <div>{translate('Password')}</div>
+            <div .password style="flow:horizontal">
+                {this.renderPop()}
+                <PasswordEyeArea />
+                {svg_edit}
+            </div>
+        </div>;
+    }
+
+    function renderPop() {
+        var method = handler.get_option('verification-method');
+        var approve_mode= handler.get_option('approve-mode');
+        var show_password = approve_mode != 'click';
+        return <popup><menu.context #edit-password-context>
+            <li #approve-mode-password style='display:none'><span>{svg_checkmark}</span>{translate('Accept sessions via password')}</li>
+            <li #approve-mode-click style='display:none'><span>{svg_checkmark}</span>{translate('Accept sessions via click')}</li>
+            <li #approve-mode-both style='display:none'><span>{svg_checkmark}</span>{translate('Accept sessions via both')}</li>
+            { !show_password ? '' : <div .separator  style='display:none' /> }
+            { !show_password ? '' : <li #use-temporary-password><span>{svg_checkmark}</span>{translate('Use one-time password')}</li> }
+            { !show_password ? '' : <li #use-permanent-password><span>{svg_checkmark}</span>{translate('Use permanent password')}</li> }
+            { !show_password ? '' : <li #use-both-passwords  style='display:none'><span>{svg_checkmark}</span>{translate('Use both passwords')}</li> }
+            { !show_password ? '' : <div .separator style='display:none' /> }
+            { !show_password ? '' : <li #set-password  style='display:none'  disabled={ method == 'use-temporary-password' ? "true" : "false" }>{translate('Set permanent password')}</li> }
+        </menu></popup>;
+    }
+
+    function toggleMenuState() {
+         var mode= handler.get_option('approve-mode');
+        var mode_id;
+        if (mode == 'password')
+            mode_id = 'approve-mode-password';
+        else if (mode == 'click')
+            mode_id = 'approve-mode-click';
+        else
+            mode_id = 'approve-mode-both';
+        var pwd_id = handler.get_option('verification-method');
+        if (pwd_id != 'use-temporary-password' && pwd_id != 'use-permanent-password')
+            pwd_id = 'use-both-passwords';
+        for (var el in this.$$(menu#edit-password-context>li)) {
+            if (el.id.indexOf("approve-mode-") == 0)
+                el.attributes.toggleClass("selected", el.id == mode_id);
+            if (el.id.indexOf("use-") == 0)
+                el.attributes.toggleClass("selected", el.id == pwd_id);
+        }
+    }
+
+    event click $(svg#edit) (_, me) {
+        var approve_mode= handler.get_option('approve-mode');
+        var show_password = approve_mode != 'click';
+        if(show_password && temporaryPasswordLengthMenu) temporaryPasswordLengthMenu.update({show: true });
+        var menu = $(menu#edit-password-context);        
+        me.popup(menu);
+    }
+
+    event click $(li#use-permanent-password) {
+        var me = this;
+        var password = handler.permanent_password();
+        var value_field = password.length == 0 ? "" : "value=" + password;
+        msgbox("custom-password", translate("Set Password"), "<div .form .set-password> \
+            <div><span>" + translate('Password') + ":</span><input|password(password) .outline-focus " + value_field + " /></div> \
+            <div><span>" + translate('Confirmation') + ":</span><input|password(confirmation) " + value_field + " /></div> \
+        </div> \
+        ", "", function(res=null) {
+            if (!res) return;
+            var p0 = (res.password || "").trim();
+            var p1 = (res.confirmation || "").trim();
+            if (p0.length < 6 && p0.length != 0) {
+                return translate("Too short, at least 6 characters.");
+            }
+            if (p0 != p1) {
+                return translate("The confirmation is not identical.");
+            }
+            handler.set_permanent_password(p0);
+            me.update();
+        });
+    }
+
+    event click $(menu#edit-password-context>li) (_, me) {
+        if (me.id.indexOf('use-') == 0) {
+            handler.set_option('verification-method', me.id);
+            this.toggleMenuState();
+            passwordArea.update();
+        } else if (me.id.indexOf('approve-mode') == 0) {
+            var approve_mode;
+            if (me.id == 'approve-mode-password')
+                approve_mode = 'password';
+            else if (me.id == 'approve-mode-click')
+                approve_mode = 'click';
+            else
+                approve_mode = '';
+            handler.set_option('approve-mode', approve_mode);
+            this.toggleMenuState();
+            passwordArea.update();
+        }
+    }
+}
+
+var password_cache = ["","","",""];
+function updatePasswordArea() {
+    self.timer(1s, function() {
+        var temporary_password = handler.temporary_password();
+        var verification_method = handler.get_option('verification-method');
+        var temporary_password_length = handler.get_option('temporary-password-length');
+        var approve_mode = handler.get_option('approve-mode');
+        var update = false;
+        if (password_cache[0] != temporary_password) {
+            password_cache[0] = temporary_password;
+            update = true;
+        }
+        if (password_cache[1] != verification_method) {
+            password_cache[1] = verification_method;
+            update = true;
+        }
+        if (password_cache[2] != temporary_password_length) {
+            password_cache[2] = temporary_password_length;
+            update = true;
+        }
+        if (password_cache[3] != approve_mode) {
+            password_cache[3] = approve_mode;
+            update = true;
+        }
+        if (update) passwordArea.update();
+        updatePasswordArea();
+    });                          
+}
+updatePasswordArea();
+
+class ID: Reactor.Component {
+    function render() {
+        return <input type="text" #remote_id .outline-focus novalue={translate("Enter Remote ID")} maxlength="21"
+        value={formatId(handler.get_remote_id())} />;
+    }
+
+    // https://github.com/c-smile/sciter-sdk/blob/master/doc/content/sciter/Event.htm
+    event change {
+        var fid = formatId(this.value);
+        var d = this.value.length - (this.old_value || "").length;
+        this.old_value = this.value;
+        var start = this.xcall(#selectionStart) || 0;
+        var end = this.xcall(#selectionEnd);
+        if (fid == this.value || d <= 0 || start != end) {
+            return;
+        }
+        // fix Caret position
+        this.value = fid;
+        var text_after_caret = this.old_value.substr(start);
+        var n = fid.length - formatId(text_after_caret).length;
+        this.xcall(#setSelection, n, n);
+    }
+}
+
+var reg = /^\d+$/;
+function formatId(id) {
+    id = id.replace(/\s/g, "");
+    if (reg.test(id) && id.length > 3) {
+        var n = id.length;
+        var a = n % 3 || 3;
+        var new_id = id.substr(0, a);
+        for (var i = a; i < n; i += 3) {
+            new_id += " " + id.substr(i, 3);
+        }
+        return new_id;
+    }
+    return id;
+}
+
+event keydown (evt) {
+    if (view.focus && view.focus.id != 'remote_id') {
+        return;
+    }
+    if (!evt.shortcutKey) {
+        if (isEnterKey(evt)) {
+            var el = $(button#connect);
+            view.focus = el;
+            el.sendEvent("click");
+            // simulate button click effect, windows does not have this issue
+            el.attributes.toggleClass("active", true);
+            self.timer(0.3s, function() {
+                el.attributes.toggleClass("active", false);
+            });
+        }
+    }
+}
+
+$(body).content(<div style="size:*"><App /><div #msgbox /></div>);
+
+function self.closing() {
+    var (x, y, w, h) = view.box(#rectw, #border, #screen);
+    handler.closing(x, y, w, h);
+    return true;
+}
+
+function self.ready() {
+    var r = handler.get_size();
+    if (isReasonableSize(r) && r[2] > 0) {
+        var (sx, sy, sw, sh) = view.screenBox(#workarea, #rectw);
+        if (r[2] >= sw && r[3] >= sh) {
+            self.timer(1ms, function() { view.windowState = View.WINDOW_MAXIMIZED; });
+        } else {
+            view.move(r[0], r[1], r[2], r[3]);
+        }
+    } else {
+        centerize(scaleIt(800), scaleIt(600));
+    }
+    if (!handler.get_remote_id()) {
+        view.focus = $(#remote_id);
+    }
+    refreshCurrentUser();
+    updateTheme();
+}
+
+function showAbout() {
+    myIdMenu.showAbout();
+}
+
+function showSettings() {
+    if ($(#overlay).style#display == 'block') return;
+    myIdMenu.showSettingMenu();
+}
+
+function checkConnectStatus() {
+    handler.check_mouse_time(); // trigger connection status updater
+    self.timer(1s, function() {
+        var tmp = !!handler.get_option("stop-service");
+        if (tmp != service_stopped) {
+            service_stopped = tmp;
+            app.update();
+        }
+        tmp = handler.using_public_server();
+        if (tmp != using_public_server) {
+            using_public_server = tmp;
+            app.connect_status.update();
+        }
+        tmp = handler.get_connect_status();
+        if (tmp[0] != connect_status) {
+            connect_status = tmp[0];
+            app.connect_status.update();
+        }
+        if (tmp[1] != key_confirmed) {
+            key_confirmed = tmp[1];
+            app.update();
+        }
+        if (tmp[2] && tmp[2] != my_id) {
+            stdout.println("id updated");
+            app.update();
+        }
+        tmp = handler.get_error();
+        if (system_error != tmp) {
+            system_error = tmp;
+            app.update();
+        }
+        tmp = handler.get_software_update_url();
+        if (tmp != software_update_url) {
+            software_update_url = tmp;
+            app.update();
+        }
+        if (handler.recent_sessions_updated()) {
+            stdout.println("recent sessions updated");
+            updateAbPeer();
+            app.update();
+        }
+        check_if_overlay();
+        checkConnectStatus();    
+    });                          
+}                                
+                                 
+var enter = false;               
+function self.onMouse(evt) {     
+    switch(evt.type) {           
+    case Event.MOUSE_ENTER:    
+        enter = true;
+        check_if_overlay();
+        break;
+    case Event.MOUSE_LEAVE:
+        $(#overlay).style#display = 'none';
+        enter = false;
+        break;
+    }
+}
+
+function check_if_overlay() {
+    if (!handler.get_option('allow-remote-config-modification')) {
+        var time0 = getTime();
+        handler.check_mouse_time();
+        self.timer(120ms, function() {
+            if (!enter) return;
+            var d = time0 - handler.get_mouse_time();
+            if (d < 120) $(#overlay).style#display = 'block';
+        });
+    }
+}
+
+checkConnectStatus();
+
+function login() {
+    var name0 = getUserName();
+    var pass0 = '';
+    msgbox("custom-login", translate('Login'), <div .form .set-password> 
+            <div><span>{translate('Username')}:</span><input|text name="username" value={name0} .outline-focus /></div> 
+            <div><span>{translate('Password')}:</span><PasswordComponent value={pass0} /></div> 
+        </div>, "", function(res=null, show_progress) {
+        if (!res) return;
+        show_progress();
+        var name = (res.username || '').trim();
+        if (!name) {
+            show_progress(false, translate("Username missed"));
+            return " ";
+        }
+        var pass = (res.password || '').trim();
+        if (!pass) {
+            show_progress(false, translate("Password missed"));
+            return " ";
+        }
+        abLoading = true;
+        var url = handler.get_api_server();
+        httpRequest(url + "/api/login", #post, {username: name, password: pass, id: my_id, uuid: handler.get_uuid()}, function(data) {
+            if (data.error) {
+                abLoading = false;
+                var err = translate(data.error);
+                show_progress(false, err);
+                return;
+            }
+            handler.set_local_option("access_token", data.access_token);
+            handler.set_local_option("user_info", JSON.stringify(data.user));
+            show_progress(-1);
+            myIdMenu.update();
+            getAb();
+        }, function(err, status) {
+            abLoading = false;
+            err = translate(err);
+            if (url.indexOf('rustdesk') < 0) err = url + ', ' + err;
+            show_progress(false, err);
+        });
+        return " ";
+      });
+}
+
+function reset_token() {
+    handler.set_local_option("access_token", "");
+    handler.set_local_option("user_info", "");
+    handler.set_local_option("selected-tags", "");
+    myIdMenu.update();
+    resetAb();
+    if (abComponent) {
+        abComponent.update();
+    }
+}
+
+function logout() {
+    var url = handler.get_api_server();
+    httpRequest(url + "/api/logout", #post, {id: my_id, uuid: handler.get_uuid()}, function(data) {
+    }, function(err, status) {
+        msgbox("custom-error", translate('Error'), err);
+    }, getHttpHeaders());
+    reset_token();
+}
+
+function refreshCurrentUser() {
+    if (!handler.get_local_option("access_token")) return;
+    abLoading = true;
+    abError = "";
+    app.update();
+    httpRequest(handler.get_api_server() + "/api/currentUser", #post, {id: my_id, uuid: handler.get_uuid()}, function(data) {
+        if (data.error) {
+            handleAbError(data.error);
+            return;
+        }
+        handler.set_local_option("user_info", JSON.stringify(data));
+        myIdMenu.update();
+        getAb();
+    }, function(err, status) {
+        if (status == 401 || status == 400) {
+            reset_token();
+        }
+        handleAbError(err);
+    }, getHttpHeaders());
+} 
+
+function getHttpHeaders() {
+    return "Authorization: Bearer " + handler.get_local_option("access_token");
+}
